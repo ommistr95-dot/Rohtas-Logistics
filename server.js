@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const pino = require('pino');
+const qrcode = require('qrcode'); // Browser me QR dikhane ke liye
 const { 
   default: makeWASocket, 
   useMultiFileAuthState, 
@@ -15,7 +16,6 @@ app.use(express.static('public'));
 
 const PORT = process.env.PORT || 3000;
 
-// Daily Rates Database (Admin Panel se update hoga)
 let rateDatabase = {
   materials: {
     "10mm_pink": { name: "10mm Pink Stone Gitti", baseRate: 1150 },
@@ -32,7 +32,7 @@ let rateDatabase = {
 
 const userSessions = {};
 
-// Admin API endpoints
+// Admin API
 app.get('/api/rates', (req, res) => res.json(rateDatabase));
 
 app.post('/api/rates/update', (req, res) => {
@@ -42,7 +42,32 @@ app.post('/api/rates/update', (req, res) => {
   res.json({ success: true, message: "Rates updated successfully!" });
 });
 
-// WhatsApp Bot Engine Connection
+// WhatsApp Bot & Browser QR Route
+let latestQR = "";
+let botStatus = "Disconnected";
+
+// Route to display QR code directly on browser screen
+app.get('/qr', async (req, res) => {
+  if (botStatus === "Connected") {
+    return res.send(`<h1>✅ WhatsApp Bot is Already Connected & Running!</h1>`);
+  }
+  if (!latestQR) {
+    return res.send(`<h1>⏳ Generating QR Code, please refresh the page in 5 seconds...</h1>`);
+  }
+  try {
+    const qrImageURL = await qrcode.toDataURL(latestQR);
+    res.send(`
+      <div style="text-align: center; margin-top: 50px; font-family: sans-serif;">
+        <h2>Scan this QR Code to Connect WhatsApp Bot</h2>
+        <img src="${qrImageURL}" alt="WhatsApp QR Code" style="width: 300px; height: 300px; border: 2px solid #ccc; padding: 10px; border-radius: 10px;" />
+        <p>Refresh this page if it expires.</p>
+      </div>
+    `);
+  } catch (err) {
+    res.status(500).send("Error generating QR code image.");
+  }
+});
+
 let sock;
 async function startWhatsAppBot() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
@@ -56,17 +81,26 @@ async function startWhatsAppBot() {
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect } = update;
+    const { connection, lastDisconnect, qr } = update;
+    
+    if (qr) {
+      latestQR = qr;
+      botStatus = "Waiting for Scan";
+      console.log('📌 New QR Code Generated!');
+    }
+
     if (connection === 'close') {
+      botStatus = "Disconnected";
       const shouldReconnect = (lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut);
-      console.log('Connection closed. Reconnecting...', shouldReconnect);
       if (shouldReconnect) startWhatsAppBot();
     } else if (connection === 'open') {
+      botStatus = "Connected";
+      latestQR = "";
       console.log('🚀 WhatsApp Bot Successfully Connected!');
     }
   });
 
-  // Incoming Messages Handler
+  // Bot Message Handler
   sock.ev.on('messages.upsert', async (m) => {
     const msg = m.messages[0];
     if (!msg.message || msg.key.fromMe) return;
@@ -77,14 +111,12 @@ async function startWhatsAppBot() {
     if (!userSessions[from]) userSessions[from] = { step: 0, data: {} };
     const session = userSessions[from];
 
-    // Trigger Menu
     if (body.toLowerCase().includes('hi') || body.toLowerCase().includes('rate') || body === '0') {
       session.step = 1;
       await sock.sendMessage(from, { text: `*🚜 ROHTAS LOGISTICS BOT*\n\nNamaste! Dehri/Sasaram Mining Corridor Rate Engine.\n\n*Material Chuniye (Number Bhejein):*\n1️⃣ 10mm Pink Stone Gitti\n2️⃣ 20mm Pink Stone Gitti\n3️⃣ Red River Sand (Baalu)\n4️⃣ Crusher Dust` });
       return;
     }
 
-    // Step 1: Material Selection
     if (session.step === 1) {
       const keys = ["10mm_pink", "20mm_pink", "river_baalu", "crusher_dust"];
       const idx = parseInt(body.trim()) - 1;
@@ -100,7 +132,6 @@ async function startWhatsAppBot() {
       return;
     }
 
-    // Step 2: Location Selection
     if (session.step === 2) {
       const locKeys = ["banaras", "patna", "buxar"];
       const idx = parseInt(body.trim()) - 1;
@@ -116,7 +147,6 @@ async function startWhatsAppBot() {
       return;
     }
 
-    // Step 3: Calculation & Quotation Card
     if (session.step === 3) {
       const truckMap = { "1": 1, "2": 5, "3": 10 };
       const count = truckMap[body.trim()];
@@ -139,5 +169,4 @@ async function startWhatsAppBot() {
 }
 
 startWhatsAppBot();
-
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
