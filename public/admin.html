@@ -2,32 +2,284 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Admin Rate Manager</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-slate-900 text-white p-6">
-    <div class="max-w-md mx-auto bg-slate-800 p-6 rounded-xl border border-slate-700">
-        <h1 class="text-lg font-bold text-emerald-400 mb-4">🚜 Rohtas Logistics Admin</h1>
-        <form class="space-y-3 text-xs">
-            <label>10mm Gitti Base Rate (₹/Ton):</label>
-            <input type="number" id="r1" class="w-full bg-slate-700 p-2 rounded text-white">
-            <label>Banaras Freight (₹/Ton):</label>
-            <input type="number" id="r2" class="w-full bg-slate-700 p-2 rounded text-white">
-            <button type="button" onclick="save()" class="w-full bg-emerald-600 py-2 rounded font-bold mt-2">Save Rates</button>
-        </form>
-    </div>
-    <script>
-        async function save() {
-            await fetch('/api/rates/update', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    materials: { "10mm_pink": { name: "10mm Pink Gitti", baseRate: Number(document.getElementById('r1').value) } },
-                    freight: { "banaras": { name: "Banaras", costPerTon: Number(document.getElementById('r2').value) } }
-                })
-            });
-            alert('Saved successfully!');
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f2f4ee">
+    <title>Rohtas Logistics | Operations</title>
+    <style>
+        :root {
+            color-scheme: light;
+            --ink: #1c302c;
+            --muted: #64746e;
+            --paper: #f2f4ee;
+            --white: #fffefa;
+            --line: #dce2d9;
+            --green: #245c49;
+            --green-soft: #dcebe1;
+            --orange: #b95331;
+            --orange-soft: #f5e4d8;
+            --mono: "DM Mono", "Courier New", monospace;
+            --sans: "Trebuchet MS", "Segoe UI", sans-serif;
         }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); }
+        button, input, select { font: inherit; }
+        button { cursor: pointer; }
+        .topbar { background: var(--ink); color: #f6f5eb; padding: 14px max(22px, calc((100vw - 1180px) / 2)); display: flex; justify-content: space-between; align-items: center; gap: 18px; }
+        .brand { display: flex; align-items: center; gap: 12px; font-size: 15px; font-weight: 700; }
+        .brand-mark { width: 34px; height: 34px; display: grid; place-items: center; background: #d87950; color: #1c302c; font-family: var(--mono); font-size: 14px; }
+        .brand small { display: block; color: #bac8c0; font: 10px var(--mono); letter-spacing: 0; margin-top: 3px; }
+        .access { display: flex; align-items: center; gap: 8px; }
+        .access input { width: min(230px, 42vw); border: 1px solid #53675e; background: #293d37; color: white; padding: 9px 11px; outline: none; }
+        .access input::placeholder { color: #bdc9c2; }
+        .button { border: 0; background: var(--green); color: white; padding: 10px 14px; font-weight: 700; }
+        .button:hover { background: #174535; }
+        .button:disabled { opacity: .48; cursor: not-allowed; }
+        .button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+        .button.secondary:hover { background: var(--green-soft); }
+        .page { max-width: 1180px; margin: 0 auto; padding: 27px 22px 56px; }
+        .heading { display: flex; justify-content: space-between; align-items: end; gap: 20px; padding-bottom: 19px; border-bottom: 1px solid var(--line); }
+        .eyebrow { color: var(--orange); font: 11px var(--mono); text-transform: uppercase; }
+        h1 { font-size: 28px; letter-spacing: 0; margin: 6px 0 0; font-weight: 700; }
+        .date-note { color: var(--muted); font: 11px var(--mono); text-align: right; }
+        .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); gap: 28px; padding: 25px 0 30px; border-bottom: 1px solid var(--line); }
+        .section-head { display: flex; justify-content: space-between; align-items: center; min-height: 28px; margin-bottom: 15px; }
+        h2 { font-size: 16px; margin: 0; }
+        .section-index { color: var(--orange); font: 11px var(--mono); }
+        .connection-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; border-block: 1px solid var(--line); padding: 13px 0; }
+        .status { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; }
+        .status::before { content: ""; width: 8px; height: 8px; background: #a7aaa2; border-radius: 50%; }
+        .status.connected::before { background: #2b875c; }
+        .status.waiting::before { background: #c56a3e; }
+        .qr-area { min-height: 193px; display: grid; place-items: center; padding: 15px 0; }
+        .qr-area img { width: 176px; height: 176px; object-fit: contain; background: white; }
+        .empty { color: var(--muted); font-size: 13px; text-align: center; max-width: 280px; line-height: 1.6; }
+        .qr-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; }
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr 110px; gap: 12px; align-items: end; }
+        label { display: block; color: var(--muted); font: 11px var(--mono); margin-bottom: 7px; }
+        select, input[type="number"] { width: 100%; min-height: 41px; border: 1px solid var(--line); background: var(--white); color: var(--ink); padding: 9px 10px; outline-color: var(--green); }
+        .quote-output { min-height: 95px; margin-top: 16px; padding: 13px 15px; background: var(--green-soft); display: flex; justify-content: space-between; align-items: center; gap: 15px; }
+        .quote-output p { margin: 0; color: #486357; font-size: 12px; line-height: 1.6; white-space: pre-line; }
+        .quote-output strong { display: block; margin-top: 4px; color: var(--ink); font: 21px var(--mono); }
+        .quote-output .empty { text-align: left; }
+        .leads { padding-top: 25px; }
+        .table-wrap { overflow-x: auto; border-top: 1px solid var(--line); }
+        table { width: 100%; border-collapse: collapse; min-width: 690px; text-align: left; }
+        th { color: var(--muted); font: 10px var(--mono); text-transform: uppercase; padding: 12px 10px; }
+        td { padding: 12px 10px; border-top: 1px solid var(--line); font-size: 13px; }
+        td:first-child { font-weight: 700; }
+        .lead-count { font: 11px var(--mono); color: var(--muted); }
+        .notice { position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 12px); opacity: 0; pointer-events: none; background: var(--ink); color: white; padding: 10px 14px; font-size: 13px; transition: .18s ease; }
+        .notice.show { transform: translate(-50%, 0); opacity: 1; }
+        @media (max-width: 760px) {
+            .topbar { align-items: flex-start; flex-direction: column; padding: 13px 18px; }
+            .access { width: 100%; }
+            .access input { flex: 1; width: auto; }
+            .page { padding: 22px 18px 40px; }
+            .heading { align-items: flex-start; flex-direction: column; }
+            .date-note { text-align: left; }
+            .grid { grid-template-columns: 1fr; gap: 26px; }
+            .form-grid { grid-template-columns: 1fr 1fr; }
+            .form-grid > div:last-child { grid-column: 1 / 2; }
+        }
+        @media (max-width: 420px) {
+            h1 { font-size: 24px; }
+            .form-grid { grid-template-columns: 1fr; }
+            .form-grid > div:last-child { grid-column: auto; }
+            .quote-output { align-items: flex-start; flex-direction: column; }
+            .qr-footer { align-items: flex-start; flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand"><div class="brand-mark">RL</div><div>ROHTAS LOGISTICS<small>OPERATIONS CONSOLE</small></div></div>
+        <form class="access" id="access-form">
+            <input id="admin-key" type="password" autocomplete="current-password" placeholder="Admin key" aria-label="Admin key" required>
+            <button class="button" type="submit">Unlock</button>
+        </form>
+    </header>
+    <main class="page">
+        <div class="heading">
+            <div><div class="eyebrow">Dehri / Sasaram / Rohtas corridor</div><h1>Dispatch control</h1></div>
+            <div class="date-note" id="last-updated">Awaiting secure connection</div>
+        </div>
+
+        <div class="grid">
+            <section aria-labelledby="connection-title">
+                <div class="section-head"><h2 id="connection-title">WhatsApp connection</h2><span class="section-index">01</span></div>
+                <div class="connection-row"><span class="status" id="connection-status">Locked</span><button class="button secondary" id="refresh-status" type="button" disabled title="Refresh connection status">Refresh</button></div>
+                <div class="qr-area" id="qr-area"><p class="empty">Unlock the console to view connection status and scan QR.</p></div>
+                <div class="qr-footer"><span id="qr-caption">QR access is protected</span><span>Protected route: /qr</span></div>
+            </section>
+
+            <section aria-labelledby="quote-title">
+                <div class="section-head"><h2 id="quote-title">Quote tester</h2><span class="section-index">02</span></div>
+                <form id="quote-form">
+                    <div class="form-grid">
+                        <div><label for="material">MATERIAL</label><select id="material" required disabled></select></div>
+                        <div><label for="destination">DESTINATION</label><select id="destination" required disabled></select></div>
+                        <div><label for="trucks">TRUCKS · 30 T</label><input id="trucks" type="number" min="1" max="100" value="1" required disabled></div>
+                    </div>
+                    <div class="quote-output" id="quote-output"><p class="empty">Select a route and quantity to calculate a sample quote.</p></div>
+                    <button class="button" type="submit" id="calculate" disabled>Calculate quote</button>
+                </form>
+            </section>
+        </div>
+
+        <section class="leads" aria-labelledby="leads-title">
+            <div class="section-head"><h2 id="leads-title">Booking leads</h2><span class="lead-count" id="lead-count">0 requests</span></div>
+            <div class="table-wrap"><table>
+                <thead><tr><th>Name</th><th>Loading date</th><th>Material</th><th>Destination</th><th>Quantity</th><th>WhatsApp</th></tr></thead>
+                <tbody id="lead-rows"><tr><td colspan="6" class="empty">Unlock to load booking requests.</td></tr></tbody>
+            </table></div>
+        </section>
+    </main>
+    <div class="notice" id="notice" role="status" aria-live="polite"></div>
+
+    <script type="module">
+        const keyInput = document.querySelector("#admin-key");
+        const statusLabel = document.querySelector("#connection-status");
+        const qrArea = document.querySelector("#qr-area");
+        const notice = document.querySelector("#notice");
+        let adminKey = sessionStorage.getItem("adminKey") ?? "";
+        let qrUrl = "";
+        let noticeTimer;
+
+        keyInput.value = adminKey;
+        const controls = [...document.querySelectorAll("#refresh-status, #material, #destination, #trucks, #calculate")];
+
+        function showNotice(message) {
+            notice.textContent = message;
+            notice.classList.add("show");
+            clearTimeout(noticeTimer);
+            noticeTimer = setTimeout(() => notice.classList.remove("show"), 2800);
+        }
+
+        async function api(path, options = {}) {
+            const response = await fetch(path, {
+                ...options,
+                headers: { "x-admin-key": adminKey, ...(options.headers ?? {}) }
+            });
+            const type = response.headers.get("content-type") ?? "";
+            const body = type.includes("application/json") ? await response.json() : await response.blob();
+            if (!response.ok) throw new Error(body.error ?? "Request failed");
+            return body;
+        }
+
+        function setUnlocked(unlocked) {
+            controls.forEach(control => { control.disabled = !unlocked; });
+        }
+
+        async function loadQr(status) {
+            if (!status.qrAvailable) {
+                qrArea.replaceChildren(Object.assign(document.createElement("p"), {
+                    className: "empty",
+                    textContent: status.status === "Connected" ? "WhatsApp is connected. Incoming rate and booking requests are active." : "QR is not ready yet. Refresh in a moment."
+                }));
+                document.querySelector("#qr-caption").textContent = "";
+                return;
+            }
+            const image = await api("/qr");
+            if (qrUrl) URL.revokeObjectURL(qrUrl);
+            qrUrl = URL.createObjectURL(image);
+            const qrImage = document.createElement("img");
+            qrImage.src = qrUrl;
+            qrImage.alt = "WhatsApp pairing QR code";
+            qrArea.replaceChildren(qrImage);
+            document.querySelector("#qr-caption").textContent = "Scan from WhatsApp > Linked devices";
+        }
+
+        async function refreshDashboard() {
+            try {
+                const status = await api("/api/status");
+                statusLabel.textContent = status.status;
+                statusLabel.className = `status ${status.status === "Connected" ? "connected" : status.qrAvailable ? "waiting" : ""}`;
+                document.querySelector("#last-updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+                await loadQr(status);
+                const leads = await api("/api/leads");
+                renderLeads(leads);
+            } catch (error) {
+                showNotice(error.message);
+            }
+        }
+
+        function renderLeads(leads) {
+            const rows = document.querySelector("#lead-rows");
+            rows.replaceChildren();
+            document.querySelector("#lead-count").textContent = `${leads.length} ${leads.length === 1 ? "request" : "requests"}`;
+            if (!leads.length) {
+                const row = rows.insertRow();
+                const cell = row.insertCell();
+                cell.colSpan = 6;
+                cell.className = "empty";
+                cell.textContent = "No booking requests yet.";
+                return;
+            }
+            for (const lead of [...leads].reverse()) {
+                const row = rows.insertRow();
+                for (const value of [lead.name, lead.loadingDate, lead.material, lead.destination, `${lead.truckCount} truck · ${lead.quantityTons} t`, lead.phone]) {
+                    row.insertCell().textContent = value ?? "";
+                }
+            }
+        }
+
+        async function unlock() {
+            adminKey = keyInput.value.trim();
+            if (!adminKey) return;
+            try {
+                const rates = await api("/api/rates");
+                sessionStorage.setItem("adminKey", adminKey);
+                setUnlocked(true);
+                document.querySelector("#material").replaceChildren();
+                document.querySelector("#destination").replaceChildren();
+                for (const [key, material] of Object.entries(rates.materials)) {
+                    document.querySelector("#material").add(new Option(material.name, key));
+                }
+                for (const [key, destination] of Object.entries(rates.destinations)) {
+                    document.querySelector("#destination").add(new Option(destination.name, key));
+                }
+                await refreshDashboard();
+            } catch (error) {
+                setUnlocked(false);
+                sessionStorage.removeItem("adminKey");
+                showNotice(error.message);
+            }
+        }
+
+        function formatCurrency(amount) {
+            return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
+        }
+
+        document.querySelector("#access-form").addEventListener("submit", event => {
+            event.preventDefault();
+            unlock();
+        });
+        document.querySelector("#refresh-status").addEventListener("click", refreshDashboard);
+        document.querySelector("#quote-form").addEventListener("submit", async event => {
+            event.preventDefault();
+            try {
+                const quote = await api("/api/quote", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({
+                        materialKey: document.querySelector("#material").value,
+                        destinationKey: document.querySelector("#destination").value,
+                        truckCount: Number(document.querySelector("#trucks").value)
+                    })
+                });
+                const summary = document.createElement("p");
+                summary.textContent = `${quote.material} · ${quote.destination}\n${quote.quantityTons} ton · ${formatCurrency(quote.materialPerTon + quote.freightPerTon)} / ton`;
+                const total = document.createElement("strong");
+                total.textContent = formatCurrency(quote.total);
+                document.querySelector("#quote-output").replaceChildren(summary, total);
+            } catch (error) {
+                showNotice(error.message);
+            }
+        });
+
+        setUnlocked(false);
+        if (adminKey) unlock();
+        setInterval(() => { if (adminKey) refreshDashboard(); }, 15000);
     </script>
 </body>
 </html>
