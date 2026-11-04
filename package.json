@@ -1,0 +1,15 @@
+{
+  "name": "rohtas-logistics-bot",
+  "version": "1.0.0",
+  "description": "WhatsApp B2B Logistics Automation Engine",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.6.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "pino": "^8.19.0"
+  }
+}
