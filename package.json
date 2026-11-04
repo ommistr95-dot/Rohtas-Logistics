@@ -3,13 +3,19 @@
   "version": "1.0.0",
   "description": "WhatsApp B2B Logistics Automation Engine",
   "main": "server.js",
+  "type": "module",
+  "engines": {
+    "node": ">=20.18.0"
+  },
   "scripts": {
-    "start": "node server.js"
+    "start": "node --env-file-if-exists=.env server.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.6.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "pino": "^8.19.0"
+    "pino": "^8.19.0",
+    "qrcode": "^1.5.4"
   }
 }

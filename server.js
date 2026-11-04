@@ -1,172 +1,189 @@
-const express = require('express');
-const cors = require('cors');
-const path = require('path');
-const pino = require('pino');
-const qrcode = require('qrcode'); // Browser me QR dikhane ke liye
-const { 
-  default: makeWASocket, 
-  useMultiFileAuthState, 
-  DisconnectReason 
-} = require('@whiskeysockets/baileys');
+import { timingSafeEqual } from "node:crypto";
+import { createServer } from "node:http";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import cors from "cors";
+import express from "express";
+import makeWASocket, {
+  DisconnectReason,
+  useMultiFileAuthState
+} from "@whiskeysockets/baileys";
+import pino from "pino";
+import QRCode from "qrcode";
+import { createBotHandler } from "./lib/bot.js";
+import { getLeads, saveLead } from "./lib/leads.js";
+import { getRates, quoteRate } from "./lib/rates.js";
 
-const app = express();
-app.use(express.json());
-app.use(cors());
-app.use(express.static('public'));
+const root = dirname(fileURLToPath(import.meta.url));
 
-const PORT = process.env.PORT || 3000;
-
-let rateDatabase = {
-  materials: {
-    "10mm_pink": { name: "10mm Pink Stone Gitti", baseRate: 1150 },
-    "20mm_pink": { name: "20mm Pink Stone Gitti", baseRate: 1200 },
-    "river_baalu": { name: "Red River Sand (Baalu)", baseRate: 980 },
-    "crusher_dust": { name: "Crusher Dust / Plaster Sand", baseRate: 650 }
-  },
-  freight: {
-    "banaras": { name: "Banaras (Varanasi, UP)", costPerTon: 450 },
-    "patna": { name: "Patna (Bihar)", costPerTon: 620 },
-    "buxar": { name: "Buxar (Bihar)", costPerTon: 380 }
-  }
-};
-
-const userSessions = {};
-
-// Admin API
-app.get('/api/rates', (req, res) => res.json(rateDatabase));
-
-app.post('/api/rates/update', (req, res) => {
-  const { materials, freight } = req.body;
-  if (materials) rateDatabase.materials = { ...rateDatabase.materials, ...materials };
-  if (freight) rateDatabase.freight = { ...rateDatabase.freight, ...freight };
-  res.json({ success: true, message: "Rates updated successfully!" });
-});
-
-// WhatsApp Bot & Browser QR Route
-let latestQR = "";
-let botStatus = "Disconnected";
-
-// Route to display QR code directly on browser screen
-app.get('/qr', async (req, res) => {
-  if (botStatus === "Connected") {
-    return res.send(`<h1>✅ WhatsApp Bot is Already Connected & Running!</h1>`);
-  }
-  if (!latestQR) {
-    return res.send(`<h1>⏳ Generating QR Code, please refresh the page in 5 seconds...</h1>`);
-  }
-  try {
-    const qrImageURL = await qrcode.toDataURL(latestQR);
-    res.send(`
-      <div style="text-align: center; margin-top: 50px; font-family: sans-serif;">
-        <h2>Scan this QR Code to Connect WhatsApp Bot</h2>
-        <img src="${qrImageURL}" alt="WhatsApp QR Code" style="width: 300px; height: 300px; border: 2px solid #ccc; padding: 10px; border-radius: 10px;" />
-        <p>Refresh this page if it expires.</p>
-      </div>
-    `);
-  } catch (err) {
-    res.status(500).send("Error generating QR code image.");
-  }
-});
-
-let sock;
-async function startWhatsAppBot() {
-  const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-
-  sock = makeWASocket({
-    auth: state,
-    logger: pino({ level: 'silent' }),
-    browser: ["Rohtas Logistics", "Chrome", "1.0.0"]
-  });
-
-  sock.ev.on('creds.update', saveCreds);
-
-  sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect, qr } = update;
-    
-    if (qr) {
-      latestQR = qr;
-      botStatus = "Waiting for Scan";
-      console.log('📌 New QR Code Generated!');
-    }
-
-    if (connection === 'close') {
-      botStatus = "Disconnected";
-      const shouldReconnect = (lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut);
-      if (shouldReconnect) startWhatsAppBot();
-    } else if (connection === 'open') {
-      botStatus = "Connected";
-      latestQR = "";
-      console.log('🚀 WhatsApp Bot Successfully Connected!');
-    }
-  });
-
-  // Bot Message Handler
-  sock.ev.on('messages.upsert', async (m) => {
-    const msg = m.messages[0];
-    if (!msg.message || msg.key.fromMe) return;
-
-    const from = msg.key.remoteJid;
-    const body = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
-
-    if (!userSessions[from]) userSessions[from] = { step: 0, data: {} };
-    const session = userSessions[from];
-
-    if (body.toLowerCase().includes('hi') || body.toLowerCase().includes('rate') || body === '0') {
-      session.step = 1;
-      await sock.sendMessage(from, { text: `*🚜 ROHTAS LOGISTICS BOT*\n\nNamaste! Dehri/Sasaram Mining Corridor Rate Engine.\n\n*Material Chuniye (Number Bhejein):*\n1️⃣ 10mm Pink Stone Gitti\n2️⃣ 20mm Pink Stone Gitti\n3️⃣ Red River Sand (Baalu)\n4️⃣ Crusher Dust` });
-      return;
-    }
-
-    if (session.step === 1) {
-      const keys = ["10mm_pink", "20mm_pink", "river_baalu", "crusher_dust"];
-      const idx = parseInt(body.trim()) - 1;
-      if (idx >= 0 && idx < keys.length) {
-        session.data.matKey = keys[idx];
-        session.data.matName = rateDatabase.materials[keys[idx]].name;
-        session.data.baseRate = rateDatabase.materials[keys[idx]].baseRate;
-        session.step = 2;
-        await sock.sendMessage(from, { text: `✅ *Material:* ${session.data.matName}\n\n*Destination Chuniye:*\n1️⃣ Banaras\n2️⃣ Patna\n3️⃣ Buxar` });
-      } else {
-        await sock.sendMessage(from, { text: "❌ Kripya sahi number bhejein (1 se 4)." });
-      }
-      return;
-    }
-
-    if (session.step === 2) {
-      const locKeys = ["banaras", "patna", "buxar"];
-      const idx = parseInt(body.trim()) - 1;
-      if (idx >= 0 && idx < locKeys.length) {
-        session.data.locKey = locKeys[idx];
-        session.data.locName = rateDatabase.freight[locKeys[idx]].name;
-        session.data.freight = rateDatabase.freight[locKeys[idx]].costPerTon;
-        session.step = 3;
-        await sock.sendMessage(from, { text: `📍 *Destination:* ${session.data.locName}\n\n*Kitne Truck chahiye? (30 Ton per truck)*\n1️⃣ 1 Truck (30 Tons)\n2️⃣ 5 Trucks (150 Tons)\n3️⃣ 10 Trucks (300 Tons)` });
-      } else {
-        await sock.sendMessage(from, { text: "❌ Kripya sahi destination number bhejein." });
-      }
-      return;
-    }
-
-    if (session.step === 3) {
-      const truckMap = { "1": 1, "2": 5, "3": 10 };
-      const count = truckMap[body.trim()];
-      if (count) {
-        const tons = count * 30;
-        const matCost = tons * session.data.baseRate;
-        const freightCost = tons * session.data.freight;
-        const total = matCost + freightCost;
-
-        const invoice = `📋 *OFFICIAL LOGISTICS QUOTATION*\n-----------------------------------\n*Material:* ${session.data.matName}\n*Quantity:* ${tons} Tons (${count} Trucks)\n*Location:* ${session.data.locName}\n-----------------------------------\n*Material Cost:* ₹${matCost.toLocaleString('en-IN')}\n*Freight Cost:* ₹${freightCost.toLocaleString('en-IN')}\n*GRAND TOTAL:* ₹${total.toLocaleString('en-IN')}\n-----------------------------------\n✅ *Spot Dispatch Ready.*\n_Reset ke liye 0 bhejein._`;
-
-        await sock.sendMessage(from, { text: invoice });
-        session.step = 0;
-      } else {
-        await sock.sendMessage(from, { text: "❌ Kripya 1, 2 ya 3 select karein." });
-      }
-      return;
-    }
-  });
+function safeEqual(left, right) {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-startWhatsAppBot();
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+function requireAdminKey(req, res, next) {
+  const expected = process.env.ADMIN_KEY;
+  if (!expected) return res.status(503).json({ error: "Admin access is not configured" });
+
+  const supplied = req.get("x-admin-key") ?? req.get("authorization")?.replace(/^Bearer\s+/i, "");
+  if (!supplied || !safeEqual(supplied, expected)) {
+    return res.status(401).json({ error: "Invalid admin key" });
+  }
+  next();
+}
+
+function messageText(message = {}) {
+  let content = message;
+  while (content.ephemeralMessage || content.viewOnceMessage || content.viewOnceMessageV2) {
+    content = content.ephemeralMessage?.message ??
+      content.viewOnceMessage?.message ??
+      content.viewOnceMessageV2?.message ?? {};
+  }
+  return content.conversation ??
+    content.extendedTextMessage?.text ??
+    content.imageMessage?.caption ??
+    content.videoMessage?.caption ?? "";
+}
+
+export function createApp(botState) {
+  const app = express();
+  app.use(cors());
+  app.use(express.json({ limit: "32kb" }));
+  app.use(express.static(join(root, "public")));
+
+  app.get("/api/status", requireAdminKey, (_req, res) => {
+    res.json({ status: botState.status, qrAvailable: Boolean(botState.qr) });
+  });
+
+  app.get("/api/rates", requireAdminKey, (_req, res) => res.json(getRates()));
+
+  app.post("/api/quote", requireAdminKey, (req, res) => {
+    try {
+      res.json(quoteRate(req.body));
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/leads", requireAdminKey, async (_req, res, next) => {
+    try {
+      res.json(await getLeads());
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/qr", requireAdminKey, async (_req, res, next) => {
+    if (!botState.qr) {
+      return res.status(409).json({ error: "QR code is not available", status: botState.status });
+    }
+    try {
+      res.type("png").send(await QRCode.toBuffer(botState.qr, { width: 360, margin: 2 }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.use((error, _req, res, _next) => {
+    console.error("Request failed:", error);
+    res.status(500).json({ error: "Internal server error" });
+  });
+  return app;
+}
+
+export function extractMessageText(message) {
+  return messageText(message);
+}
+
+export async function startWhatsAppBot(botState) {
+  let reconnectTimer;
+  let socket;
+  const handleMessage = createBotHandler({ sendMessage: (jid, text) => socket.sendMessage(jid, { text }), saveLead });
+
+  async function connect() {
+    try {
+      const { state, saveCreds } = await useMultiFileAuthState(join(root, "auth_info"));
+      socket = makeWASocket({
+        auth: state,
+        logger: pino({ level: "silent" }),
+        browser: ["Rohtas Logistics", "Chrome", "1.0.0"]
+      });
+
+      socket.ev.on("creds.update", saveCreds);
+      socket.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
+        if (qr) {
+          botState.qr = qr;
+          botState.status = "Waiting for scan";
+          console.log("WhatsApp QR is ready at /qr");
+        }
+        if (connection === "open") {
+          botState.qr = "";
+          botState.status = "Connected";
+          console.log("WhatsApp bot connected");
+        }
+        if (connection === "close") {
+          botState.qr = "";
+          botState.status = "Disconnected";
+          const loggedOut = lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut;
+          if (!loggedOut && !reconnectTimer) {
+            reconnectTimer = setTimeout(() => {
+              reconnectTimer = undefined;
+              void connect();
+            }, 2000);
+          }
+        }
+      });
+
+      socket.ev.on("messages.upsert", async ({ messages }) => {
+        for (const message of messages) {
+          const jid = message.key?.remoteJid;
+          const text = messageText(message.message);
+          if (!jid || jid === "status@broadcast" || jid.endsWith("@g.us") || message.key.fromMe || !text) continue;
+          try {
+            await handleMessage({ jid, text, pushName: message.pushName });
+          } catch (error) {
+            console.error("Could not handle WhatsApp message:", error);
+          }
+        }
+      });
+    } catch (error) {
+      botState.status = "Disconnected";
+      console.error("Could not start WhatsApp connection:", error);
+      if (!reconnectTimer) {
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = undefined;
+          void connect();
+        }, 5000);
+      }
+    }
+  }
+
+  await connect();
+  return () => {
+    clearTimeout(reconnectTimer);
+    socket?.end(undefined);
+  };
+}
+
+export async function startServer() {
+  const port = Number(process.env.PORT ?? 3000);
+  const botState = { status: "Starting", qr: "" };
+  const server = createServer(createApp(botState));
+  server.listen(port, () => console.log(`Admin panel: http://localhost:${port}/admin.html`));
+  const stopBot = await startWhatsAppBot(botState);
+
+  const shutdown = () => {
+    stopBot();
+    server.close(() => process.exit(0));
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  startServer().catch(error => {
+    console.error("Server startup failed:", error);
+    process.exitCode = 1;
+  });
+}
